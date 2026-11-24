@@ -56,8 +56,9 @@ with sync_playwright() as p:
     pg.goto('http://127.0.0.1:8765/'); pg.wait_for_function('window.__map && window.__app.state.me')
     print('boot OK, me =', pg.evaluate('JSON.stringify([__app.state.me.lat, __app.state.me.acc])'))
     # 3) 乗車 → 走行 → 降車
-    pg.click('#btnStatus'); pg.wait_for_function('!!window.__app.state.trip')
-    assert 'occupied' in pg.get_attribute('#btnStatus','class')
+    pg.click('#meter [data-m=pay]'); pg.wait_for_timeout(200); assert pg.evaluate('__app.state.meter')=='vacant' and not pg.evaluate('!!__app.state.trip')   # 空車中の「支払」は無効
+    pg.click('#meter [data-m=occupied]'); pg.wait_for_function('!!window.__app.state.trip')
+    assert 'on' in pg.get_attribute('#meter [data-m=occupied]','class') and 'on' not in pg.get_attribute('#meter [data-m=vacant]','class')
     t0=int(time.time()*1000)
     for i,(la,ln) in enumerate(path[1:]):
         pg.evaluate('p=>__app.onPos(p)', {'lat':la,'lng':ln,'acc':8,'spd':10,'hdg':90 if i<10 else 0,'t':t0+i*3000})
@@ -65,7 +66,11 @@ with sync_playwright() as p:
     pg.reload(); pg.wait_for_function('!!window.__app.state.trip'); print('trip survives reload OK')   # 実車中の再読み込み
     ctx.set_geolocation({'latitude':path[-1][0],'longitude':path[-1][1],'accuracy':6})
     pg.wait_for_function('window.__app.state.me && Math.abs(__app.state.me.lat-%f)<1e-6' % path[-1][0])
-    pg.click('#btnStatus'); pg.wait_for_function('!window.__app.state.trip'); pg.wait_for_selector('#sheet:not([hidden])')
+    pg.click('#meter [data-m=pay]'); pg.wait_for_function("!window.__app.state.trip && __app.state.meter==='pay'"); pg.wait_for_timeout(300)
+    pg.screenshot(path='/tmp/shot_meter.png')
+    pg.reload(); pg.wait_for_function("window.__map && __app.state.meter==='pay'")   # 支払の状態は再読み込みしても残る
+    pg.click('#meter [data-m=vacant]'); pg.wait_for_function("__app.state.meter==='vacant'")
+    pg.click('#btnMenu'); pg.click('#sheet [data-a=trips]'); pg.click('#sheet [data-a=open]'); pg.wait_for_selector('#sheet .list')
     txt=pg.inner_text('#sheet'); print('trip sheet:', ' / '.join(txt.split('\n')[:6])); assert '左折' in txt and '乗車' in txt and '降車' in txt
     pg.screenshot(path='/tmp/shot_trip.png'); pg.click('#sheet [data-a=x]')
     # 4) 地図タップ → ピン → 配車記録（上客）

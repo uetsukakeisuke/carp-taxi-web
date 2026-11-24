@@ -144,33 +144,50 @@ const cleanAddr = a => String(a || '').replace(/^日本、\s*/, '').replace(/〒
 
 // ============ 乗車・降車と走行ルートの記録 ============
 let trip = null, tripLine = null, tripOverlays = [];
+// メーターと同じ並びの 3 ボタン：空車 → 実車（乗車を記録）→ 支払（降車を記録）→ 空車
+let meter = 'vacant', meterBusy = false;
 function setStatusUi() {
-  const b = $('#btnStatus'), on = !!trip;
-  b.className = 'status ' + (on ? 'occupied' : 'vacant');
-  b.innerHTML = on ? '<b>実　車</b><small>降車を記録</small>' : '<b>空　車</b><small>乗車を記録</small>';
-  $('#tripBar').hidden = !on;
+  document.querySelectorAll('#meter [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === meter));
+  $('#tripBar').hidden = !trip;
 }
 function restoreTrip() { // 途中で画面を閉じても、実車中の記録を引き継ぐ
-  trip = ls.get('activeTrip', null); setStatusUi();
+  trip = ls.get('activeTrip', null); meter = trip ? 'occupied' : ls.get('meter', 'vacant') === 'pay' ? 'pay' : 'vacant'; setStatusUi();
   if (trip) { tripLine = new G.Polyline({ map, path: trip.pts, strokeColor: '#fb8c00', strokeWeight: 5, strokeOpacity: .9 }); updateTripBar(); }
 }
-async function toggleStatus() {
-  const b = $('#btnStatus'); if (b.classList.contains('busy')) return;
-  b.classList.add('busy'); toast('位置を測定中…', 6500);
-  const fix = await preciseFix(); b.classList.remove('busy');
-  if (!fix) return toast('現在地が取得できません。位置情報の許可を確認してください', 5000);
-  if (!trip) {
-    trip = { id: 't' + Date.now(), start: { ...fix, address: '' }, pts: [fix], end: null };
-    tripLine = new G.Polyline({ map, path: [fix], strokeColor: '#fb8c00', strokeWeight: 5, strokeOpacity: .9 });
-    ls.set('activeTrip', trip); setStatusUi(); updateTripBar(); sendPosition(true);
-    toast(`乗車を記録しました（${hm(fix.t)}・精度 約${Math.round(fix.acc)}m）`);
-    const t = trip; revGeo(fix).then(a => { t.start.address = a; if (trip === t) ls.set('activeTrip', t); });
-  } else {
-    const t = trip; t.pts.push(fix); t.end = { ...fix, address: '' };
-    t.events = L.detectTurns(t.pts); t.dist = L.pathDistance(t.pts); t.end.address = await revGeo(fix);
-    await db.put('trips', t); ls.set('activeTrip', null); trip = null; tripLine?.setMap(null); tripLine = null; setStatusUi(); sendPosition(true);
-    toast(`降車を記録しました（${hm(fix.t)}・精度 約${Math.round(fix.acc)}m）`); showTrip(t);
-  }
+async function measure() {
+  toast('位置を測定中…', 6500);
+  const fix = await preciseFix();
+  if (!fix) toast('現在地が取得できません。位置情報の許可を確認してください', 5000);
+  return fix;
+}
+async function board() { // 乗車：押した時点の位置を記録し、走行ルートの記録を始める
+  const fix = await measure(); if (!fix) return false;
+  trip = { id: 't' + Date.now(), start: { ...fix, address: '' }, pts: [fix], end: null };
+  tripLine = new G.Polyline({ map, path: [fix], strokeColor: '#fb8c00', strokeWeight: 5, strokeOpacity: .9 });
+  ls.set('activeTrip', trip); updateTripBar();
+  toast(`乗車を記録しました（${hm(fix.t)}・精度 約${Math.round(fix.acc)}m）`);
+  const t = trip; revGeo(fix).then(a => { t.start.address = a; if (trip === t) ls.set('activeTrip', t); });
+  return true;
+}
+async function alight() { // 降車：押した時点の位置を記録し、走行ルートを保存する
+  const fix = await measure(); if (!fix) return false;
+  const t = trip; t.pts.push(fix); t.end = { ...fix, address: '' };
+  t.events = L.detectTurns(t.pts); t.dist = L.pathDistance(t.pts);
+  trip = null; ls.set('activeTrip', null); tripLine?.setMap(null); tripLine = null;
+  await db.put('trips', t);
+  toast(`降車を記録しました（${hm(fix.t)}・${L.fmtDist(t.dist)}）。メニューの「乗車記録」で確認できます`, 4000);
+  revGeo(fix).then(a => { t.end.address = a; db.put('trips', t); });
+  return true;
+}
+async function pressMeter(to) {
+  if (meterBusy || to === meter) return;
+  if (to === 'pay' && !trip) return toast('「支払」は実車のときに押してください');
+  meterBusy = true; $('#meter').classList.add('busy');
+  try {
+    if (to === 'occupied') { if (!await board()) return; }
+    else if (trip && !await alight()) return;      // 実車から「支払」または「空車」を押したら降車を記録
+    meter = to; ls.set('meter', meter); setStatusUi(); sendPosition(true);
+  } finally { meterBusy = false; $('#meter').classList.remove('busy'); }
 }
 function trackTrip(p) {
   if (!trip) return;
@@ -210,7 +227,7 @@ function showTrip(t) {
 }
 async function showTripList() {
   const all = (await db.all('trips')).sort((a, b) => b.start.t - a.start.t);
-  sheet('乗車記録（走行ルート）', all.length ? `<div class="list">${all.map(t => `<button data-a="open" data-id="${t.id}"><b>${md(t.start.t)} ${hm(t.start.t)} → ${hm(t.end.t)}　${L.fmtDist(t.dist || 0)}</b><small>${esc(t.start.address)} → ${esc(t.end.address)}</small></button>`).join('')}</div>` : '<p>まだ記録がありません。「乗車を記録」→「降車を記録」で保存されます。</p>',
+  sheet('乗車記録（走行ルート）', all.length ? `<div class="list">${all.map(t => `<button data-a="open" data-id="${t.id}"><b>${md(t.start.t)} ${hm(t.start.t)} → ${hm(t.end.t)}　${L.fmtDist(t.dist || 0)}</b><small>${esc(t.start.address)} → ${esc(t.end.address)}</small></button>`).join('')}</div>` : '<p>まだ記録がありません。「実車」を押してから「支払」（または「空車」）を押すと保存されます。</p>',
     { open(b) { showTrip(all.find(t => t.id === b.dataset.id)); } });
 }
 
@@ -530,7 +547,7 @@ async function sendPosition(force = false) {
   if (!force && lastSent && Date.now() - lastSent.t < 4000) return;                         // 送りすぎない
   if (!force && lastSent && L.haversine(lastSent, me) < 10 && Date.now() - lastSent.t < 20000) return; // 止まっている間は 20 秒おき
   lastSent = { lat: me.lat, lng: me.lng, t: Date.now() };
-  try { await cloud.put(`taxi_locations/${key(cfg.code)}`, { carNumber: cfg.plate || '', heading, isAvailable: !trip, latitude: me.lat, longitude: me.lng, timestamp: Date.now(), userType: 'driver' }); }
+  try { await cloud.put(`taxi_locations/${key(cfg.code)}`, { carNumber: cfg.plate || '', heading, isAvailable: meter === 'vacant', latitude: me.lat, longitude: me.lng, timestamp: Date.now(), userType: 'driver' }); }
   catch (e) { console.warn('位置の送信に失敗', e); }
   if (sos) sendSos(true);
 }
@@ -656,7 +673,7 @@ function initUi() {
   $('#btnPlate').onclick = () => textDialog('ナンバー入力', '車両ナンバー', cfg.plate, v => { cfg.plate = v; $('#plateText').textContent = v || 'ナンバー入力'; setTimeout(() => sendPosition(true)); });
   $('#btnExplore').onclick = openExplore; $('#btnMenu').onclick = showMenu; $('#btnTwo').onclick = twoPointDialog;
   $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
-  $('#btnStatus').onclick = toggleStatus;
+  $('#meter').onclick = e => { const b = e.target.closest('[data-m]'); if (b) pressMeter(b.dataset.m); };
   $('#btnFollow').onclick = () => { follow = !follow; setFollowUi(); if (follow && me) { map.panTo(me); map.setZoom(Math.max(map.getZoom() || 16, 16)); } };
   $('#zin').onclick = () => map.setZoom((map.getZoom() || 16) + 1); $('#zout').onclick = () => map.setZoom((map.getZoom() || 16) - 1);
   $('#chkPrivate').checked = cfg.priv; $('#chkPrivate').onchange = e => { cfg.priv = e.target.checked; saveCfg(); if (cfg.priv) hidePosition(); else sendPosition(true); };
@@ -688,5 +705,5 @@ function initUi() {
   window.addEventListener('pagehide', () => { if (trip) ls.set('activeTrip', trip); });
   setFollowUi(); updateScale();
 }
-window.__app = { get state() { return { trip, nav, sos, records, me }; }, onPos: p => onPos(p), cfg };
+window.__app = { get state() { return { trip, nav, sos, records, me, meter }; }, onPos: p => onPos(p), cfg };
 boot();

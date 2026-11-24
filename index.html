@@ -40,7 +40,11 @@
 
   <div class="zoom"><button id="zin">＋</button><span id="scale">–</span><button id="zout">－</button></div>
   <label class="private"><span>📍 位置を非公開</span><input id="chkPrivate" type="checkbox"><i></i></label>
-  <button id="btnStatus" class="status vacant"><b>空　車</b><small>乗車を記録</small></button>
+  <div id="meter" class="meter">
+    <button data-m="vacant" class="m-vacant">空　車</button>
+    <button data-m="occupied" class="m-occupied">実　車</button>
+    <button data-m="pay" class="m-pay">支　払</button>
+  </div>
   <button id="btnFollow" class="fab follow on"><span>➤</span><small>追跡中</small></button>
   <button id="btnS" class="fab sos"><span>S</span><small>長押しで発動</small></button>
   <div id="tripBar" class="tripbar" hidden></div>
