@@ -120,6 +120,12 @@ with sync_playwright() as p:
         if a=='stats': pg.click('#sheet [data-a=x]')
         if a=='set': pg.click('#dialogBox [data-a=close]')
     pg.click('#btnMenu'); pg.click('#sheet [data-a=legend]'); pg.wait_for_timeout(200); pg.screenshot(path='/tmp/shot_main.png')
+    # 設定リンク：キー・車両コード・ナンバーが保存され、URL からは消える
+    s2=b.new_context(viewport={'width':390,'height':844}, geolocation={'latitude':34.6975,'longitude':135.4868,'accuracy':8}, permissions=['geolocation'], locale='ja-JP')
+    s2.route(DB+'/**', db); l=s2.new_page(); l.add_init_script(path=os.path.join(ROOT,'tests','stub.js'))
+    l.goto('http://127.0.0.1:8765/?key=TESTKEY&code=taxi_55&plate=%E3%81%AA%E3%81%AB%E3%82%8F%20530'); l.wait_for_function('window.__map && window.__app.state.me')
+    got=l.evaluate('[__app.cfg.key, __app.cfg.code, __app.cfg.plate, location.search, document.querySelector("#plateText").textContent]'); print('setup link:', got)
+    assert got==['TESTKEY','taxi_55','なにわ 530','','なにわ 530'], got; s2.close()
     # 11) お客様用ページ
     v=ctx.new_page(); v.on('pageerror', lambda e: errors.append('view pageerror: '+str(e)))
     v.route('https://tile.openstreetmap.org/**', lambda r: r.abort())

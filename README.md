@@ -64,3 +64,7 @@ iPhone 版タクシーアプリを、ブラウザで動く形に作り直した�
 
 - `node tests/logic.test.mjs`：計算ロジックの単体テスト
 - `python3 tests/smoke.py`：地図を模擬してブラウザで主要な操作を通すテスト（Playwright と Chrome が必要）
+
+## 設定リンク
+
+`?key=<APIキー>&code=<車両コード>&plate=<ナンバー>` を付けた URL を開くと、その内容が端末に保存されます（保存後は URL から消えます）。利用者に手入力させずに渡すためのものです。

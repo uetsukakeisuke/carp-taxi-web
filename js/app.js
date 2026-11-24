@@ -82,7 +82,19 @@ function loadMaps(key) {
     document.head.append(s);
   });
 }
+// 設定リンク：URL に ?key=…&code=…&plate=… を付けて開くと、その内容を端末に保存する。
+// 利用者が API キーや車両コードを手で入力しなくて済むようにするためのもの。保存後は URL から消す。
+function applySetupLink() {
+  const q = new URLSearchParams(location.search); let changed = false;
+  for (const [param, field] of [['key', 'key'], ['code', 'code'], ['plate', 'plate']]) {
+    const v = (q.get(param) || '').trim(); if (!v) continue;
+    if (param === 'code' && !validKey(v)) continue;
+    cfg[field] = v; changed = true;
+  }
+  if (changed) { saveCfg(); history.replaceState(null, '', location.pathname); }
+}
 async function boot() {
+  applySetupLink();
   if (!cfg.key && !window.google?.maps) return showSetup();
   try { await loadMaps(cfg.key); } catch (e) { return showSetup(e.message); }
   G = google.maps;
