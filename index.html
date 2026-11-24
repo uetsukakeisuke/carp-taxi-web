@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1565c0">
+<title>Carp-taxi</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231565c0'/%3E%3Ctext x='32' y='45' font-size='36' text-anchor='middle'%3E%F0%9F%9A%95%3C/text%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="map"></div>
+
+<!-- 通常時の操作部品 -->
+<div id="ui">
+  <div class="top">
+    <button id="btnPlate" class="pill"><span class="ic">🚕</span><span id="plateText">ナンバー入力</span> ✎</button>
+    <button id="btnExplore" class="pill blue">🧭 探索ナビ</button>
+    <button id="btnMenu" class="round" aria-label="メニュー">⋮</button>
+  </div>
+  <div class="search">
+    <span class="ic">🔍</span>
+    <input id="q" type="search" placeholder="目的地を入力…" autocomplete="off" enterkeyhint="search">
+    <button id="btnTwo" class="chip">⑂ 2点間</button>
+  </div>
+  <div id="results" class="results" hidden></div>
+
+  <div id="legend" class="legend">
+    <select id="dowSel"></select>
+    <div class="clock"><span id="clock">--:--</span><button id="btnLive" class="live on">LIVE</button></div>
+    <input id="slider" type="range" min="0" max="1439" step="10">
+    <div class="cap">配車時刻との差</div>
+    <div id="levels"></div>
+    <div class="lv"><i class="dot vip"></i>★ 上客</div>
+    <div class="lv"><i class="dot ng"></i>⚠ 危険客</div>
+  </div>
+
+  <div class="zoom"><button id="zin">＋</button><span id="scale">–</span><button id="zout">－</button></div>
+  <label class="private"><span>📍 位置を非公開</span><input id="chkPrivate" type="checkbox"><i></i></label>
+  <button id="btnStatus" class="status vacant"><b>空　車</b><small>乗車を記録</small></button>
+  <button id="btnFollow" class="fab follow on"><span>➤</span><small>追跡中</small></button>
+  <button id="btnS" class="fab sos"><span>S</span><small>長押しで発動</small></button>
+  <div id="tripBar" class="tripbar" hidden></div>
+</div>
+
+<!-- 地図をタップした地点の操作 -->
+<div id="pinBar" class="sheet small" hidden></div>
+
+<!-- ナビ中の表示 -->
+<div id="nav" hidden>
+  <div class="navtop"><div id="navArrow" class="arrow">↑</div><div><div id="navDist" class="ndist"></div><div id="navText" class="ntext"></div></div></div>
+  <div id="navNext" class="navnext" hidden></div>
+  <div class="navside">
+    <button id="navMute" class="round">🔊</button>
+    <button id="navOver" class="round">🗺</button>
+    <button id="navTraffic" class="round">🚦</button>
+  </div>
+  <div id="navSpeed" class="speed"><b>0</b><small>km/h</small></div>
+  <div class="navbottom">
+    <div><b id="navEta">--:--</b><small>到着予定</small></div>
+    <div><b id="navRemT"></b><small id="navRemD"></small></div>
+    <button id="navEnd" class="btn red">終了</button>
+  </div>
+</div>
+
+<div id="sheet" class="sheet" hidden></div>
+<div id="dialog" class="dialog" hidden><div class="box" id="dialogBox"></div></div>
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
