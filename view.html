@@ -10,10 +10,10 @@
   #map{position:fixed;inset:0}
   #card{position:fixed;left:10px;right:10px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:1000;background:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 3px 14px rgba(0,0,0,.25);display:flex;gap:14px;align-items:center}
   #badge{font-size:22px;font-weight:800;color:#fff;border-radius:999px;padding:8px 18px;letter-spacing:.1em;background:#9e9e9e;white-space:nowrap}
-  #badge.free{background:#43a047}#badge.busy{background:#fb8c00}
+  #badge.free{background:#43a047}#badge.busy{background:#fb8c00}#badge.pickup{background:#546e7a}
   #plate{font-weight:700;font-size:16px}#when{color:#666;font-size:13px}
   .car{width:26px;height:26px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.5);background:#9e9e9e}
-  .car.free{background:#43a047}.car.busy{background:#fb8c00}
+  .car.free{background:#43a047}.car.busy{background:#fb8c00}.car.pickup{background:#546e7a}
 </style>
 </head>
 <body>
@@ -30,7 +30,7 @@ const map = L.map('map', { zoomControl: false, attributionControl: true }).setVi
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(map);
 let marker = null, first = true;
 function show(state, plate, when) {
-  const b = $('#badge'); b.className = state; b.textContent = { free: '空　車', busy: '実　車', '': '表示なし' }[state];
+  const b = $('#badge'); b.className = state; b.textContent = { free: '空　車', busy: '実　車', pickup: '迎　車', '': '表示なし' }[state];
   $('#plate').textContent = plate; $('#when').textContent = when;
   if (marker) marker.setIcon(L.divIcon({ className: '', html: `<div class="car ${state}"></div>`, iconSize: [32, 32], iconAnchor: [16, 16] }));
 }
@@ -38,7 +38,7 @@ async function tick() {
   if (!validKey(code)) return show('', '', 'URL が正しくありません。QR コードをもう一度読み取ってください。');
   let v; try { v = await cloud.get(`taxi_locations/${encodeURIComponent(code)}`); } catch { return show('', '', '通信できませんでした。電波の良い場所でお試しください。'); }
   if (!v || !Number.isFinite(v.latitude)) { marker?.remove(); marker = null; return show('', '', '現在、このタクシーの位置は公開されていません。'); }
-  const pos = [v.latitude, v.longitude], age = Date.now() - v.timestamp, state = v.isAvailable ? 'free' : 'busy';
+  const pos = [v.latitude, v.longitude], age = Date.now() - v.timestamp, state = v.isAvailable ? 'free' : v.status === 'pickup' ? 'pickup' : 'busy';
   if (!marker) marker = L.marker(pos, { icon: L.divIcon({ className: '', html: '<div class="car"></div>', iconSize: [32, 32], iconAnchor: [16, 16] }) }).addTo(map); else marker.setLatLng(pos);
   if (first) { map.setView(pos, 16); first = false; } else if (!map.getBounds().pad(-0.2).contains(pos)) map.panTo(pos);
   const t = new Date(v.timestamp).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });

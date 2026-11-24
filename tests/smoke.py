@@ -96,7 +96,12 @@ with sync_playwright() as p:
     assert pg.evaluate('__app.cfg.code')=='', '使用中のコードを上書きしてはいけない'; print('code collision blocked OK')
     pg.fill('#tVal','taxi_99'); pg.click('#dialogBox [data-a=ok]'); pg.wait_for_function("__app.cfg.code==='taxi_99'"); pg.wait_for_timeout(500)
     w=[x for x in writes if x[1]=='taxi_locations/taxi_99'][-1]; print('position write:', w[0], sorted(w[2].keys()))
-    assert w[0]=='PUT' and set(w[2])=={'carNumber','heading','isAvailable','latitude','longitude','timestamp','userType'} and w[2]['isAvailable'] is True and w[2]['userType']=='driver', w
+    assert w[0]=='PUT' and set(w[2])=={'carNumber','heading','isAvailable','latitude','longitude','status','timestamp','userType'} and w[2]['isAvailable'] is True and w[2]['userType']=='driver', w
+    # 迎車：空車ではない状態として共有される。実車中は押せない
+    pg.click('#meter [data-m=pickup]'); pg.wait_for_function("__app.state.meter==='pickup'"); pg.wait_for_timeout(400)
+    w=[x for x in writes if x[1]=='taxi_locations/taxi_99'][-1][2]; assert w['isAvailable'] is False and w['status']=='pickup', w
+    pg.click('#meter [data-m=occupied]'); pg.wait_for_function('!!window.__app.state.trip'); pg.click('#meter [data-m=pickup]'); pg.wait_for_timeout(300)
+    assert pg.evaluate('__app.state.meter')=='occupied'; pg.click('#meter [data-m=vacant]'); pg.wait_for_function("__app.state.meter==='vacant'"); print('pickup OK')
     # 7) 近隣車両・SOS 通知・GPS 需要データを使った探索ナビ
     pg.reload(); pg.wait_for_function('window.__map && window.__app.state.me'); pg.wait_for_timeout(800)
     titles=pg.evaluate("__ov.filter(o=>o.map&&o.o.title).map(o=>o.o.title)"); print('markers:', titles)
@@ -131,18 +136,37 @@ with sync_playwright() as p:
     l.goto('http://127.0.0.1:8765/?key=TESTKEY&code=taxi_55&plate=%E3%81%AA%E3%81%AB%E3%82%8F%20530'); l.wait_for_function('window.__map && window.__app.state.me')
     got=l.evaluate('[__app.cfg.key, __app.cfg.code, __app.cfg.plate, location.search, document.querySelector("#plateText").textContent]'); print('setup link:', got)
     assert got==['TESTKEY','taxi_55','なにわ 530','','なにわ 530'], got; s2.close()
-    # タブレット横向き：通常時とナビ中の配置
-    pg.set_viewport_size({'width':1180,'height':820}); pg.wait_for_timeout(300)
+    # タブレット横向き：車載メーターと同じ位置（右端に上から 空車・実車・支払、下段の左から 2 番目に 迎車）
     box=lambda sel: pg.locator(sel).bounding_box()
-    m=box('#meter'); order=[pg.locator('#meter button').nth(i).inner_text().replace('\u3000','') for i in range(3)]
-    assert order==['空車','実車','支払'] and m['x']>950 and m['y']<40 and box('#meter button >> nth=0')['height']>=90, (order,m)
-    pg.click('#btnExplore'); pg.wait_for_selector('#sheet .routebox'); sh=box('#sheet'); assert sh['x']<20 and sh['x']+sh['width']<m['x'], sh   # 画面は左、ボタンは隠れない
+    def no_overlap(sels):
+        bs=[(s,box(s)) for s in sels if pg.locator(s).is_visible()]
+        for a in range(len(bs)):
+            for b_ in range(a+1,len(bs)):
+                (sa,A),(sb,B)=bs[a],bs[b_]
+                assert A['x']+A['width']<=B['x'] or B['x']+B['width']<=A['x'] or A['y']+A['height']<=B['y'] or B['y']+B['height']<=A['y'], ('重なり',sa,A,sb,B)
+        return len(bs)
+    parts=['[data-m=vacant]','[data-m=occupied]','[data-m=pay]','[data-m=pickup]','#btnS','#btnFollow','label.private','#legend','.zoom','.search','.top']
+    for W,H in ((900,560),(1024,600),(1180,820),(1280,800)):
+        pg.set_viewport_size({'width':W,'height':H}); pg.wait_for_timeout(200); assert no_overlap(parts)==len(parts)
+        v,o,pa,pk=box('[data-m=vacant]'),box('[data-m=occupied]'),box('[data-m=pay]'),box('[data-m=pickup]')
+        assert v['x']>W*0.78 and v['y']<H*0.1 and v['y']<o['y']<pa['y'] and pa['y']+pa['height']>H*0.9, (W,H,v,o,pa)      # 右端に上から 空車・実車・支払
+        assert abs((o['y']+o['height']/2)-H/2)<H*0.06 and v['height']>=H*0.14, (W,H,o)                                     # 実車は中央、ボタンは大きく
+        assert W*0.24<pk['x']<W*0.28 and pk['x']+pk['width']<W*0.46 and pk['y']+pk['height']>H*0.9, (W,H,pk)                # 迎車は下段の左から 2 番目
+    pg.set_viewport_size({'width':1180,'height':820}); pg.wait_for_timeout(200); m=box('[data-m=vacant]')
+    pg.screenshot(path='/tmp/shot_land_main.png')
+    pg.click('#btnExplore'); pg.wait_for_selector('#sheet .routebox'); sh=box('#sheet'); assert sh['x']<20 and sh['x']+sh['width']<m['x'], sh   # 画面は左、右端のボタンは隠れない
     pg.screenshot(path='/tmp/shot_land.png'); pg.click('#sheet [data-a=go]'); pg.wait_for_function('!!window.__app.state.nav'); pg.wait_for_timeout(300)
-    assert pg.locator('#meter').is_visible() and pg.locator('#btnS').is_visible() and not pg.locator('.search').is_visible()
+    assert not pg.locator('.search').is_visible()
+    navparts=['[data-m=vacant]','[data-m=occupied]','[data-m=pay]','[data-m=pickup]','#btnS','.navtop','.navbottom','#navSpeed','.navside']
+    for W,H in ((900,560),(1180,820)):
+        pg.set_viewport_size({'width':W,'height':H}); pg.wait_for_timeout(200); assert no_overlap(navparts)==len(navparts)
     pg.click('#meter [data-m=occupied]'); pg.wait_for_function("__app.state.meter==='occupied'")   # ナビ中でも実車にできる
     assert abs(pg.evaluate('Date.now()-__app.state.trip.start.t'))<10000, '乗車時刻は押した時刻'
+    pg.wait_for_timeout(200); assert no_overlap(navparts+['#tripBar'])==len(navparts)+1
     pg.screenshot(path='/tmp/shot_land_nav.png'); pg.click('#meter [data-m=pay]'); pg.wait_for_function("__app.state.meter==='pay'"); pg.click('#navEnd')
-    pg.set_viewport_size({'width':390,'height':844}); pg.click('#meter [data-m=vacant]')
+    pg.set_viewport_size({'width':390,'height':844}); pg.wait_for_timeout(200); pg.click('#meter [data-m=vacant]')
+    assert no_overlap(['[data-m=vacant]','[data-m=occupied]','[data-m=pay]','[data-m=pickup]','#btnS','#btnFollow','label.private','#legend','.zoom','.search','.top'])==11   # スマホ縦向き
+    pg.screenshot(path='/tmp/shot_portrait.png')
     # 11) お客様用ページ
     v=ctx.new_page(); v.on('pageerror', lambda e: errors.append('view pageerror: '+str(e)))
     v.route('https://tile.openstreetmap.org/**', lambda r: r.abort())

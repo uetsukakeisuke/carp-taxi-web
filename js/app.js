@@ -147,14 +147,14 @@ const cleanAddr = a => String(a || '').replace(/^日本、\s*/, '').replace(/〒
 
 // ============ 乗車・降車と走行ルートの記録 ============
 let trip = null, tripLine = null, tripOverlays = [];
-// メーターと同じ並びの 3 ボタン：空車 → 実車（乗車を記録）→ 支払（降車を記録）→ 空車
+// メーターと同じ並びのボタン：空車 → 実車（乗車を記録）→ 支払（降車を記録）→ 空車。迎車はお迎えに向かっている状態。
 let meter = 'vacant', meterBusy = false;
 function setStatusUi() {
   document.querySelectorAll('#meter [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === meter));
   $('#tripBar').hidden = !trip;
 }
 function restoreTrip() { // 途中で画面を閉じても、実車中の記録を引き継ぐ
-  trip = ls.get('activeTrip', null); meter = trip ? 'occupied' : ls.get('meter', 'vacant') === 'pay' ? 'pay' : 'vacant'; setStatusUi();
+  trip = ls.get('activeTrip', null); meter = trip ? 'occupied' : ['pay', 'pickup'].includes(ls.get('meter', 'vacant')) ? ls.get('meter') : 'vacant'; setStatusUi();
   if (trip) { tripLine = new G.Polyline({ map, path: trip.pts, strokeColor: '#fb8c00', strokeWeight: 5, strokeOpacity: .9 }); updateTripBar(); }
 }
 async function measure() {
@@ -185,6 +185,7 @@ async function alight() { // 降車：押した時点の位置を記録し、走
 async function pressMeter(to) {
   if (meterBusy || to === meter) return;
   if (to === 'pay' && !trip) return toast('「支払」は実車のときに押してください');
+  if (to === 'pickup' && trip) return toast('実車中は「迎車」にできません。先に「支払」か「空車」を押してください');
   meterBusy = true; $('#meter').classList.add('busy');
   try {
     if (to === 'occupied') { if (!await board()) return; }
@@ -550,7 +551,7 @@ async function sendPosition(force = false) {
   if (!force && lastSent && Date.now() - lastSent.t < 4000) return;                         // 送りすぎない
   if (!force && lastSent && L.haversine(lastSent, me) < 10 && Date.now() - lastSent.t < 20000) return; // 止まっている間は 20 秒おき
   lastSent = { lat: me.lat, lng: me.lng, t: Date.now() };
-  try { await cloud.put(`taxi_locations/${key(cfg.code)}`, { carNumber: cfg.plate || '', heading, isAvailable: meter === 'vacant', latitude: me.lat, longitude: me.lng, timestamp: Date.now(), userType: 'driver' }); }
+  try { await cloud.put(`taxi_locations/${key(cfg.code)}`, { carNumber: cfg.plate || '', heading, isAvailable: meter === 'vacant', status: meter, latitude: me.lat, longitude: me.lng, timestamp: Date.now(), userType: 'driver' }); }
   catch (e) { console.warn('位置の送信に失敗', e); }
   if (sos) sendSos(true);
 }
@@ -569,7 +570,7 @@ async function pollCloud() {
   others = fresh;
   for (const k of Object.keys(otherMarkers)) if (!others[k]) { otherMarkers[k].setMap(null); delete otherMarkers[k]; }
   for (const [k, v] of Object.entries(others)) {
-    const pos = { lat: v.latitude, lng: v.longitude }, title = `${v.carNumber || k}（${v.isAvailable ? '空車' : '実車'}）`;
+    const pos = { lat: v.latitude, lng: v.longitude }, title = `${v.carNumber || k}（${v.isAvailable ? '空車' : v.status === 'pickup' ? '迎車' : '実車'}）`;
     if (!otherMarkers[k]) { otherMarkers[k] = new G.Marker({ map, position: pos, icon: carIcon(v.isAvailable), title, zIndex: 80 }); otherMarkers[k].addListener('click', () => toast(otherMarkers[k].getTitle?.() || title)); }
     else { otherMarkers[k].setPosition(pos); otherMarkers[k].setIcon(carIcon(v.isAvailable)); otherMarkers[k].setTitle?.(title); }
   }
