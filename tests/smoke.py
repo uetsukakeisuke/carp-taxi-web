@@ -19,18 +19,40 @@ routes={"routes":[{"duration":"600s","distanceMeters":2000,"description":"国道
  "legs":[{"steps":[{"distanceMeters":1000,"navigationInstruction":{"maneuver":"DEPART","instructions":"東に進む"}},
                    {"distanceMeters":1000,"navigationInstruction":{"maneuver":"TURN_LEFT","instructions":"左折して なにわ筋 に入る"}}]}]}]}
 errors=[]
+DB='https://taxi-location-sharing-default-rtdb.firebaseio.com'
+now=lambda: int(time.time()*1000)
+stamp=time.strftime('%Y%m%d%H')
+store={'taxi_locations':{'taxi_01':{'carNumber':'なにわ 530 う 226','isAvailable':True,'latitude':34.7040,'longitude':135.4930,'timestamp':now(),'userType':'driver'},
+                         'old_car':{'isAvailable':True,'latitude':34.70,'longitude':135.49,'timestamp':now()-3600_000,'userType':'driver'}},
+       'sos_alerts':{'taxi_07':{'carNumber':'なにわ 500 あ 1','latitude':34.7000,'longitude':135.4900,'timestamp':now(),'active':True}}}
+grid={'34703_135492':{stamp:9},'34704_135492':{stamp:7},'34709_135501':{stamp:5},'34690_135480':{stamp:2},'37367_-122112':{stamp:50}}
+writes=[]
+def db(route):
+    from urllib.parse import urlparse, unquote
+    rq=route.request; path=unquote(urlparse(rq.url).path).strip('/').removesuffix('.json').split('/')
+    if rq.method=='GET':
+        if path[0]=='explore_nav_data': body=grid
+        else:
+            body=store
+            for k in path: body=(body or {}).get(k) if isinstance(body,dict) else None
+        return route.fulfill(status=200, content_type='application/json', body=json.dumps(body))
+    writes.append((rq.method,'/'.join(path), json.loads(rq.post_data) if rq.post_data else None))
+    if rq.method=='PUT': store.setdefault(path[0],{})[path[1]]=json.loads(rq.post_data)
+    if rq.method=='DELETE': store.get(path[0],{}).pop(path[1],None)
+    route.fulfill(status=200, content_type='application/json', body=rq.post_data or 'null')
 with sync_playwright() as p:
     b=p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream'])
     ctx=b.new_context(viewport={'width':390,'height':844}, geolocation={'latitude':34.6975,'longitude':135.4868,'accuracy':8}, permissions=['geolocation','camera','microphone'], locale='ja-JP')
     pg=ctx.new_page()
     pg.on('pageerror', lambda e: errors.append('pageerror: '+str(e)))
-    pg.on('console', lambda m: errors.append('console: '+m.text) if m.type=='error' else None)
+    pg.on('console', lambda m: errors.append('console: '+m.text) if m.type=='error' and 'navigator.vibrate' not in m.text else None)
     # 1) キー未設定 → 初期設定画面
     pg.goto('http://127.0.0.1:8765/'); pg.wait_for_selector('#sKey'); print('setup dialog OK')
     pg.screenshot(path='/tmp/shot_setup.png')
     # 2) 地図スタブで起動
     pg.add_init_script(path=os.path.join(ROOT,'tests','stub.js'))
     pg.route('https://routes.googleapis.com/**', lambda r: r.fulfill(status=200, content_type='application/json', body=json.dumps(routes)))
+    ctx.route(DB+'/**', db)
     pg.goto('http://127.0.0.1:8765/'); pg.wait_for_function('window.__map && window.__app.state.me')
     print('boot OK, me =', pg.evaluate('JSON.stringify([__app.state.me.lat, __app.state.me.acc])'))
     # 3) 乗車 → 走行 → 降車
@@ -63,19 +85,47 @@ with sync_playwright() as p:
     pg.screenshot(path='/tmp/shot_nav.png')
     pg.evaluate('p=>__app.onPos(p)', {'lat':path[-1][0]-0.0001,'lng':path[-1][1],'acc':8,'spd':3,'hdg':0,'t':t0})    # 目的地の約11m手前
     pg.wait_for_function('!window.__app.state.nav'); print('arrival OK')
-    # 6) 探索ナビ
-    pg.click('#btnExplore'); pg.wait_for_selector('#sheet .routebox'); print('explore:', pg.inner_text('#sheet .routebox').replace('\n',' | ')); pg.screenshot(path='/tmp/shot_explore.png'); pg.click('#sheet [data-a=x]')
-    # 7) S 長押し → 録画 → 解除 → 一覧
-    box=pg.locator('#btnS').bounding_box(); pg.mouse.move(box['x']+40,box['y']+40); pg.mouse.down(); pg.wait_for_function('!!window.__app.state.sos',timeout=4000); pg.mouse.up()
+    # 6) 車両コード未設定のあいだは位置を送らない → 設定すると旧アプリと同じ形式で送る
+    pg.wait_for_timeout(600); assert not [w for w in writes if w[1].startswith('taxi_locations')], writes
+    pg.click('#btnMenu'); pg.click('#sheet [data-a=code]'); pg.fill('#tVal','taxi_01'); pg.click('#dialogBox [data-a=ok]'); pg.wait_for_timeout(500)
+    assert pg.evaluate('__app.cfg.code')=='', '使用中のコードを上書きしてはいけない'; print('code collision blocked OK')
+    pg.fill('#tVal','taxi_99'); pg.click('#dialogBox [data-a=ok]'); pg.wait_for_function("__app.cfg.code==='taxi_99'"); pg.wait_for_timeout(500)
+    w=[x for x in writes if x[1]=='taxi_locations/taxi_99'][-1]; print('position write:', w[0], sorted(w[2].keys()))
+    assert w[0]=='PUT' and set(w[2])=={'carNumber','heading','isAvailable','latitude','longitude','timestamp','userType'} and w[2]['isAvailable'] is True and w[2]['userType']=='driver', w
+    # 7) 近隣車両・SOS 通知・GPS 需要データを使った探索ナビ
+    pg.reload(); pg.wait_for_function('window.__map && window.__app.state.me'); pg.wait_for_timeout(800)
+    titles=pg.evaluate("__ov.filter(o=>o.map&&o.o.title).map(o=>o.o.title)"); print('markers:', titles)
+    assert any('なにわ 530 う 226' in t and '空車' in t for t in titles) and any(t.startswith('SOS') for t in titles) and not any('old_car' in t for t in titles), titles
+    pg.click('#btnExplore'); pg.wait_for_selector('#sheet .routebox'); ex=pg.inner_text('#sheet'); print('explore:', ex.replace('\n',' | ')[:230])
+    assert '1台' in ex and '📡' in ex and '5箇所' in ex, ex
+    pg.screenshot(path='/tmp/shot_explore.png'); pg.click('#sheet [data-a=x]')
+    # 8) お客様用 QR と位置の非公開
+    pg.click('#btnMenu'); pg.click('#sheet [data-a=qr]'); pg.wait_for_selector('#dialogBox .qr svg'); qr=pg.inner_text('#dialogBox .addr'); print('qr url:', qr)
+    assert qr=='http://127.0.0.1:8765/view.html?c=taxi_99', qr
+    pg.screenshot(path='/tmp/shot_qr.png'); pg.click('#dialogBox [data-a=close]')
+    pg.click('label.private'); pg.wait_for_timeout(400); assert ('DELETE','taxi_locations/taxi_99',None) in writes; n=len(writes)
+    pg.evaluate('p=>__app.onPos(p)', {'lat':34.6990,'lng':135.4900,'acc':8,'spd':5,'hdg':0,'t':0}); pg.wait_for_timeout(400)
+    assert not [x for x in writes[n:] if x[1].startswith('taxi_locations')], '非公開中は送らない'; print('private OK')
+    pg.click('label.private'); pg.wait_for_timeout(400)
+    # 9) S 長押し → 録画・周囲へ通知 → 解除 → 一覧
+    box=pg.locator('#btnS').bounding_box(); pg.mouse.move(box['x']+40,box['y']+40); pg.mouse.down(); pg.wait_for_function('!!window.__app.state.sos',timeout=4000); pg.mouse.up(); pg.wait_for_timeout(300)
+    a=[x for x in writes if x[1]=='sos_alerts/taxi_99']; assert a and a[-1][0]=='PUT' and a[-1][2]['active'] is True, a
     pg.wait_for_timeout(3500); pg.mouse.down(); pg.wait_for_function('!window.__app.state.sos',timeout=4000); pg.mouse.up(); pg.wait_for_timeout(800)
+    assert [x for x in writes if x[1]=='sos_alerts/taxi_99'][-1][0]=='DELETE'; print('sos alert OK')
     pg.click('#btnMenu'); pg.screenshot(path='/tmp/shot_menu.png'); pg.click('#sheet [data-a=sos]'); pg.wait_for_selector('#sheet .list'); print('sos list:', pg.inner_text('#sheet .list').split('\n')[1])
     pg.click('#sheet [data-a=x]')
-    # 8) メニューの残り
+    # 10) メニューの残り
     for a in ('stats','ic','legend','traffic','set'):
         pg.click('#btnMenu'); pg.click(f'#sheet [data-a={a}]'); pg.wait_for_timeout(150)
         if a=='stats': pg.click('#sheet [data-a=x]')
         if a=='set': pg.click('#dialogBox [data-a=close]')
     pg.click('#btnMenu'); pg.click('#sheet [data-a=legend]'); pg.wait_for_timeout(200); pg.screenshot(path='/tmp/shot_main.png')
+    # 11) お客様用ページ
+    v=ctx.new_page(); v.on('pageerror', lambda e: errors.append('view pageerror: '+str(e)))
+    v.route('https://tile.openstreetmap.org/**', lambda r: r.abort())
+    v.goto('http://127.0.0.1:8765/view.html?c=taxi_01'); v.wait_for_function("document.querySelector('#badge').textContent.includes('空')")
+    print('view:', v.inner_text('#card').replace('\n',' | ')); assert 'なにわ 530 う 226' in v.inner_text('#card'); v.screenshot(path='/tmp/shot_view.png')
+    v.goto('http://127.0.0.1:8765/view.html?c=nobody'); v.wait_for_function("document.querySelector('#when').textContent.includes('公開されていません')"); print('view hidden OK')
     b.close()
 print('ERRORS:', errors if errors else 'none')
 sys.exit(1 if errors else 0)

@@ -142,15 +142,47 @@ export function clusterDemand(records, { dow, nowMin, cell = 0.0025 } = {}) {
   return list.map(c => ({ ...c, pct: Math.round(c.score / top * 100) }));
 }
 // 現在地から maxKm 以内の上位エリアを n 箇所選び、近い順に並べる。offset を変えると別案になる。
-export function pickStops(cells, origin, { n = 3, maxKm = 6, offset = 0 } = {}) {
+// 隣り合うマス目ばかり選ばないよう、選ぶエリアどうしは minSep 以上離す。
+export function pickStops(cells, origin, { n = 3, maxKm = 6, offset = 0, minSep = 400 } = {}) {
   const near = cells.filter(c => haversine(origin, c) <= maxKm * 1000);
-  const chosen = near.slice(offset, offset + n).length === n ? near.slice(offset, offset + n) : near.slice(0, n);
+  const pick = from => {
+    const ch = [];
+    for (const c of near.slice(from)) { if (ch.every(x => haversine(x, c) >= minSep)) ch.push(c); if (ch.length === n) break; }
+    return ch;
+  };
+  let chosen = pick(offset); if (offset && chosen.length < n) chosen = pick(0);
   const order = []; let cur = origin; const rest = [...chosen];
   while (rest.length) {
     rest.sort((a, b) => haversine(cur, a) - haversine(cur, b));
     cur = rest.shift(); order.push(cur);
   }
   return order;
+}
+// サーバーに蓄積された GPS の需要データ（約110mのマス目 × 「年月日時」ごとの回数）から、
+// いまの時刻（前後1時間）に近い回数を点数にする。曜日が同じなら 1.5 倍。
+export function gridDemand(grid, origin, { dow, hour, maxKm = 6 } = {}) {
+  const out = [];
+  for (const [k, stamps] of Object.entries(grid || {})) {
+    const [a, b] = k.split('_').map(Number), c = { lat: a / 1000, lng: b / 1000 };
+    if (!isFinite(c.lat) || !isFinite(c.lng) || haversine(origin, c) > maxKm * 1000) continue;
+    let score = 0, n = 0;
+    for (const [st, cnt] of Object.entries(stamps || {})) {
+      if (!/^\d{10}$/.test(st) || typeof cnt !== 'number') continue;
+      const h = +st.slice(8), dh = Math.min(Math.abs(h - hour), 24 - Math.abs(h - hour));
+      if (dh > 1) continue;
+      const day = new Date(+st.slice(0, 4), +st.slice(4, 6) - 1, +st.slice(6, 8)).getDay();
+      score += cnt * (dh === 0 ? 1 : 0.5) * (day === dow ? 1.5 : 1); n += cnt;
+    }
+    if (score > 0) out.push({ ...c, n, score, gps: true, vip: 0, address: '' });
+  }
+  return out;
+}
+// 配車記録のエリアと GPS のエリアを 1 つの順位にまとめる。実際の配車記録のほうを重く見る。
+export function mergeDemand(recCells, gpsCells) {
+  const gmax = gpsCells.reduce((m, c) => Math.max(m, c.score), 1);
+  const all = [...recCells, ...gpsCells.map(c => ({ ...c, score: c.score / gmax }))].sort((a, b) => b.score - a.score);
+  const top = all[0]?.score || 1;
+  return all.map(c => ({ ...c, pct: Math.round(c.score / top * 100) }));
 }
 
 // ---- 配車記録の CSV（スプレッドシート「taxi乗車記録」と同じ列順）----

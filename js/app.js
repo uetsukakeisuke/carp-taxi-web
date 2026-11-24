@@ -1,5 +1,6 @@
 import * as L from './logic.js';
 import { IC_SECTIONS } from './ic.js';
+import { DB_URL, makeCloud, validKey } from './cloud.js';
 
 // ============ 共通 ============
 const $ = s => document.querySelector(s);
@@ -19,8 +20,9 @@ const db = (() => { // 走行ルートと SOS 録画は容量が大きいので 
   return { put: (s, v) => tx(s, 'readwrite', o => o.put(v)), all: s => tx(s, 'readonly', o => o.getAll()), del: (s, id) => tx(s, 'readwrite', o => o.delete(id)) };
 })();
 
-const cfg = Object.assign({ key: '', mapId: '', plate: '', code: '', priv: false, avoidTolls: false, avoidHighways: false, voice: true, legend: true, ic: false, traffic: false, icEdit: false }, ls.get('cfg', {}));
+const cfg = Object.assign({ key: '', mapId: '', plate: '', code: '', priv: false, avoidTolls: false, avoidHighways: false, voice: true, legend: true, ic: false, traffic: false, icEdit: false, dbUrl: '', deviceId: '' }, ls.get('cfg', {}));
 const saveCfg = () => ls.set('cfg', cfg);
+if (!cfg.deviceId) { cfg.deviceId = 'web_' + Math.random().toString(36).slice(2, 10); saveCfg(); }
 let records = ls.get('records', []);
 const saveRecords = () => ls.set('records', records);
 
@@ -89,7 +91,7 @@ async function boot() {
     renderingType: G.RenderingType?.VECTOR, disableDefaultUI: true, gestureHandling: 'greedy', clickableIcons: false,
   });
   initUi(); startGeo(); renderRecords(); if (cfg.ic) drawIc(); if (cfg.traffic) setTraffic(true);
-  restoreTrip();
+  restoreTrip(); startCloud();
 }
 
 // ============ 現在地 ============
@@ -109,7 +111,7 @@ function onPos(p) {
     accCircle = new G.Circle({ map, center: p, radius: p.acc || 0, strokeWeight: 0, fillColor: '#1e88e5', fillOpacity: .12, clickable: false });
     map.setCenter(p);
   } else { meMarker.setPosition(p); meMarker.setIcon(icon); accCircle.setCenter(p); accCircle.setRadius(Math.min(p.acc || 0, 200)); }
-  trackTrip(p); trackSos(p);
+  trackTrip(p); trackSos(p); sendPosition();
   if (nav) navUpdate(p); else if (follow) map.panTo(p);
 }
 // ボタンを押した瞬間の、できるだけ正確な位置を取る（精度 15m 以内が出るか最長 6 秒待つ）
@@ -148,13 +150,13 @@ async function toggleStatus() {
   if (!trip) {
     trip = { id: 't' + Date.now(), start: { ...fix, address: '' }, pts: [fix], end: null };
     tripLine = new G.Polyline({ map, path: [fix], strokeColor: '#fb8c00', strokeWeight: 5, strokeOpacity: .9 });
-    ls.set('activeTrip', trip); setStatusUi(); updateTripBar();
+    ls.set('activeTrip', trip); setStatusUi(); updateTripBar(); sendPosition(true);
     toast(`乗車を記録しました（${hm(fix.t)}・精度 約${Math.round(fix.acc)}m）`);
     const t = trip; revGeo(fix).then(a => { t.start.address = a; if (trip === t) ls.set('activeTrip', t); });
   } else {
     const t = trip; t.pts.push(fix); t.end = { ...fix, address: '' };
     t.events = L.detectTurns(t.pts); t.dist = L.pathDistance(t.pts); t.end.address = await revGeo(fix);
-    await db.put('trips', t); ls.set('activeTrip', null); trip = null; tripLine?.setMap(null); tripLine = null; setStatusUi();
+    await db.put('trips', t); ls.set('activeTrip', null); trip = null; tripLine?.setMap(null); tripLine = null; setStatusUi(); sendPosition(true);
     toast(`降車を記録しました（${hm(fix.t)}・精度 約${Math.round(fix.acc)}m）`); showTrip(t);
   }
 }
@@ -417,24 +419,29 @@ function clearExplore() { exploreOverlays.forEach(o => o.setMap(null)); exploreO
 async function openExplore() {
   if (!me) return toast('現在地を取得してからもう一度お試しください');
   const now = new Date(), band = L.timeBand(now);
-  const cells = L.clusterDemand(records, { dow: now.getDay(), nowMin: nowMin() });
+  toast('需要データを読み込み中…');
+  const rec = L.clusterDemand(records, { dow: now.getDay(), nowMin: nowMin() });
+  const gps = L.gridDemand(await loadGrid(), me, { dow: now.getDay(), hour: now.getHours() });
+  const cells = L.mergeDemand(rec, gps);
   const stops = L.pickStops(cells, me, { offset: exploreOffset });
   const head = `${L.DOW[now.getDay()]} / ${band.label}（${band.from}〜${band.to}時）`;
   closeSheet(); keepRoute = false; clearExplore(); clearRoute();
-  if (!stops.length) return sheet('🧭 探索ナビ', `<p>${head}</p><p>この時間帯（前後3時間）で、現在地から6km以内の配車記録がまだありません。配車記録が増えると、需要の高いエリアを回るルートを作れます。</p>`);
+  if (!stops.length) return sheet('🧭 探索ナビ', `<p>${head}</p><p>この時間帯で、現在地から6km以内の需要データがまだありません。配車記録や走行データが増えると、需要の高いエリアを回るルートを作れます。</p>`);
+  await Promise.all(stops.map(async st => { if (!st.address) st.address = await revGeo(st); }));
   toast('需要予測ルートを作成中…');
   let route; try { [route] = await computeRoutes(me, stops[stops.length - 1], stops.slice(0, -1), false); } catch (e) { console.error(e); return toast('ルートを取得できませんでした', 5000); }
-  cells.slice(0, 80).forEach(c => exploreOverlays.push(new G.Circle({ map, center: c, radius: 60 + c.pct, strokeWeight: 0, fillColor: c.vip ? '#8e24aa' : '#43a047', fillOpacity: .3, clickable: false })));
+  const demandColor = c => c.vip ? '#8e24aa' : !c.gps ? '#1e88e5' : c.pct >= 50 ? '#e53935' : '#fb8c00';
+  cells.filter(c => L.haversine(me, c) < 6000).slice(0, 200).forEach(c => exploreOverlays.push(new G.Circle({ map, center: c, radius: 55, strokeWeight: 0, fillColor: demandColor(c), fillOpacity: .32, clickable: false })));
   stops.forEach((s, i) => exploreOverlays.push(new G.Marker({ map, position: s, label: { text: String(i + 1), color: '#fff', fontWeight: '700' }, zIndex: 300 })));
   drawRoutes([route], 0); follow = false; setFollowUi();
   const bd = new G.LatLngBounds(); route.path.forEach(p => bd.extend(p)); map.fitBounds(bd, { top: 120, bottom: 380, left: 40, right: 40 });
   sheet('🧭 探索ナビ', `<p style="margin:0 0 6px;color:#555">${head}</p>
-    <div class="cards"><div class="card c1"><b>—</b>近隣車両</div><div class="card c2"><b>—</b>交通規制</div><div class="card c3"><b>${cells.length}箇所</b>需要エリア</div></div>
+    <div class="cards"><div class="card c1"><b>${nearbyCount()}台</b>近隣車両</div><div class="card c2"><b>—</b>交通規制</div><div class="card c3"><b>${cells.length}箇所</b>需要エリア</div></div>
     <div class="routebox">需要予測ルート（${stops.length}箇所の高需要エリア経由）<div class="big">🕒 約${L.fmtDur(route.duration)}　📏 ${L.fmtDist(route.total)}　↱ 右左折 ${route.turns}回</div>
-    ${stops.map(s => `<div class="stop"><span>${s.vip ? '★' : '🚕'} ${esc(s.address) || '需要エリア'}</span><span>スコア ${s.pct}%</span></div>`).join('')}</div>
+    ${stops.map(s => `<div class="stop"><span>${s.vip ? '★' : s.gps ? '📡' : '🚕'} ${esc(s.address) || '需要エリア'}</span><span>スコア ${s.pct}%</span></div>`).join('')}</div>
     <div class="row"><button class="btn line" data-a="re">↻ 再生成</button><button class="btn blue" style="flex:2" data-a="go">➤ ナビ開始</button></div>
-    <small style="color:#666">緑：配車実績　紫：上客の実績あり　※近隣車両と交通規制はサーバー連携後に表示されます</small>`, {
-    re() { exploreOffset = (exploreOffset + 3) % Math.max(3, Math.min(cells.length, 12)); keepRoute = true; openExplore(); },
+    <small style="color:#666">🟣 配車実績（上客）　🔵 配車実績（通常）　🔴 GPS高需要　🟠 GPS中需要　🟩 空車タクシー　🟧 実車タクシー<br>※近隣車両は3km以内で10分以内に位置を更新した車両の数です。交通規制の情報は未対応です。</small>`, {
+    re() { exploreOffset = (exploreOffset + 3) % Math.max(3, Math.min(cells.length, 15)); openExplore(); },
     go() { keepRoute = true; closeSheet(); clearExplore(); startNav(route, stops[stops.length - 1], stops.slice(0, -1)); },
   }, () => { clearExplore(); if (!keepRoute) clearRoute(); keepRoute = false; }, true);
 }
@@ -470,7 +477,7 @@ async function drawIc() {
 let sos = null;
 async function startSos() {
   sos = { id: 's' + Date.now(), start: Date.now(), pts: me ? [{ lat: me.lat, lng: me.lng, acc: me.acc, t: Date.now() }] : [], chunks: [], rec: null, stream: null };
-  $('#btnS').classList.add('active'); $('#btnS small').textContent = '長押しで解除'; navigator.vibrate?.(80); wake();
+  $('#btnS').classList.add('active'); $('#btnS small').textContent = '長押しで解除'; navigator.vibrate?.(80); wake(); sendSos(true);
   try {
     sos.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: true });
     const mime = ['video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm'].find(t => window.MediaRecorder?.isTypeSupported?.(t)) || '';
@@ -480,7 +487,7 @@ async function startSos() {
   } catch (e) { console.warn('録画開始失敗', e); toast('カメラを起動できませんでした（ルートの記録は続けます）', 4000); }
 }
 async function stopSos() {
-  const s = sos; if (!s) return; sos = null;
+  const s = sos; if (!s) return; sos = null; sendSos(false);
   $('#btnS').classList.remove('active'); $('#btnS small').textContent = '長押しで発動'; navigator.vibrate?.([40, 60, 40]);
   if (s.rec && s.rec.state !== 'inactive') await new Promise(res => { s.rec.onstop = res; s.rec.stop(); });
   s.stream?.getTracks().forEach(t => t.stop());
@@ -497,6 +504,87 @@ async function showSosList() {
     save(b) { const v = all.find(x => x.id === b.dataset.id); download(`sos_${v.id}.${v.mime.includes('mp4') ? 'mp4' : 'webm'}`, v.blob); },
     route(b) { const v = all.find(x => x.id === b.dataset.id); if (v.pts.length < 2) return toast('ルートの記録がありません'); closeSheet(); drawLog(v, '#e53935'); sheet('SOS 中の走行ルート', '<p>地図の点をタップすると通過時刻が出ます。</p>', {}, clearTripOverlays, true); },
     async del(b) { await db.del('videos', b.dataset.id); showSosList(); },
+  });
+}
+
+// ============ サーバー連携：位置の共有・近隣車両・需要データ・SOS 通知 ============
+// 旧 iPhone アプリと同じ taxi_locations/<車両コード> に同じ形式で書くので、
+// お客様用ページにも、他の車両の地図にも、新旧どちらのアプリの車両も表示される。
+const cloud = makeCloud(() => cfg.dbUrl || DB_URL);
+const key = k => encodeURIComponent(k);
+let others = {}, otherMarkers = {}, sosMarkers = {}, seenSos = new Set(), lastSent = null, gridCache = null;
+async function sendPosition(force = false) {
+  if (!cfg.code || cfg.priv || !me) return;
+  if (!force && lastSent && Date.now() - lastSent.t < 4000) return;                         // 送りすぎない
+  if (!force && lastSent && L.haversine(lastSent, me) < 10 && Date.now() - lastSent.t < 20000) return; // 止まっている間は 20 秒おき
+  lastSent = { lat: me.lat, lng: me.lng, t: Date.now() };
+  try { await cloud.put(`taxi_locations/${key(cfg.code)}`, { carNumber: cfg.plate || '', heading, isAvailable: !trip, latitude: me.lat, longitude: me.lng, timestamp: Date.now(), userType: 'driver' }); }
+  catch (e) { console.warn('位置の送信に失敗', e); }
+  if (sos) sendSos(true);
+}
+function hidePosition() { if (cfg.code) cloud.del(`taxi_locations/${key(cfg.code)}`).catch(e => console.warn(e)); lastSent = null; }
+function sendSos(active) { // SOS は「位置を非公開」でも周囲に知らせる
+  const id = key(cfg.code || cfg.deviceId);
+  (active && me ? cloud.put(`sos_alerts/${id}`, { carNumber: cfg.plate || '', latitude: me.lat, longitude: me.lng, timestamp: Date.now(), active: true }) : cloud.del(`sos_alerts/${id}`)).catch(e => console.warn('SOS 通知に失敗', e));
+}
+const carIcon = free => ({ path: 'M -7,-7 7,-7 7,7 -7,7 z', fillColor: free ? '#43a047' : '#fb8c00', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 });
+async function pollCloud() {
+  if (document.visibilityState !== 'visible') return;
+  let locs, alerts;
+  try { [locs, alerts] = await Promise.all([cloud.get('taxi_locations'), cloud.get('sos_alerts')]); } catch (e) { return console.warn('サーバーに接続できません', e); }
+  const now = Date.now(), fresh = {};
+  for (const [k, v] of Object.entries(locs || {})) if (k !== cfg.code && v && Number.isFinite(v.latitude) && now - v.timestamp < 10 * 60000) fresh[k] = v;
+  others = fresh;
+  for (const k of Object.keys(otherMarkers)) if (!others[k]) { otherMarkers[k].setMap(null); delete otherMarkers[k]; }
+  for (const [k, v] of Object.entries(others)) {
+    const pos = { lat: v.latitude, lng: v.longitude }, title = `${v.carNumber || k}（${v.isAvailable ? '空車' : '実車'}）`;
+    if (!otherMarkers[k]) { otherMarkers[k] = new G.Marker({ map, position: pos, icon: carIcon(v.isAvailable), title, zIndex: 80 }); otherMarkers[k].addListener('click', () => toast(otherMarkers[k].getTitle?.() || title)); }
+    else { otherMarkers[k].setPosition(pos); otherMarkers[k].setIcon(carIcon(v.isAvailable)); otherMarkers[k].setTitle?.(title); }
+  }
+  const mine = cfg.code || cfg.deviceId, live = {};
+  for (const [k, v] of Object.entries(alerts || {})) if (k !== mine && v?.active && Number.isFinite(v.latitude) && now - v.timestamp < 15 * 60000) live[k] = v;
+  for (const k of Object.keys(sosMarkers)) if (!live[k]) { sosMarkers[k].setMap(null); delete sosMarkers[k]; seenSos.delete(k); }
+  for (const [k, v] of Object.entries(live)) {
+    const pos = { lat: v.latitude, lng: v.longitude };
+    if (!sosMarkers[k]) sosMarkers[k] = new G.Marker({ map, position: pos, zIndex: 900, label: { text: 'SOS', color: '#fff', fontWeight: '700', fontSize: '11px' }, icon: { path: G.SymbolPath.CIRCLE, scale: 16, fillColor: '#d50000', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 3 }, title: `SOS ${v.carNumber || k}` });
+    else sosMarkers[k].setPosition(pos);
+    if (!seenSos.has(k) && (!me || L.haversine(me, pos) < 10000)) { seenSos.add(k); navigator.vibrate?.([200, 100, 200]); toast(`⚠ 近くの車両が SOS を発信しました（${v.carNumber || k}）`, 8000); speak('近くの車両がSOSを発信しました'); }
+  }
+}
+const nearbyCount = () => me ? Object.values(others).filter(v => L.haversine(me, { lat: v.latitude, lng: v.longitude }) < 3000).length : 0;
+function startCloud() { pollCloud(); setInterval(pollCloud, 15000); setInterval(() => sendPosition(), 5000); }
+async function loadGrid() { // 需要データは大きいので、現在地の緯度 ±0.06°（約 6.6km）の帯だけ取り、30 分は使い回す
+  if (gridCache && Date.now() - gridCache.t < 1800000 && L.haversine(gridCache.at, me) < 3000) return gridCache.g;
+  const lo = Math.floor((me.lat - 0.06) * 1000), hi = Math.ceil((me.lat + 0.06) * 1000);
+  try { gridCache = { g: await cloud.get('explore_nav_data/demand_grid', `?orderBy=%22%24key%22&startAt=%22${lo}%22&endAt=%22${hi}~%22`) || {}, t: Date.now(), at: { lat: me.lat, lng: me.lng } }; return gridCache.g; }
+  catch (e) { console.warn('需要データの取得に失敗', e); return {}; }
+}
+function vehicleCodeDialog() {
+  dialog(`<h2>車両コード設定</h2><p style="font-size:14px;color:#555">車両ごとに違うコードを付けてください（例：taxi_02）。このコードで位置が共有され、お客様用QRコードにも使われます。</p>
+    <label>車両コード</label><input id="tVal" type="text" value="${esc(cfg.code)}" autocapitalize="off" autocomplete="off">
+    <div class="actions"><button class="txt" data-a="close">キャンセル</button><button class="btn blue" style="flex:none" data-a="ok">保存</button></div>`, {
+    async ok() {
+      const v = $('#tVal').value.trim();
+      if (v && !validKey(v)) return toast('コードに空白や . $ # [ ] / は使えません');
+      if (v && v !== cfg.code) try { // ほかの端末が使用中のコードを上書きしない
+        const cur = await cloud.get(`taxi_locations/${key(v)}`);
+        if (cur && Date.now() - cur.timestamp < 5 * 60000 && (!me || L.haversine(me, { lat: cur.latitude, lng: cur.longitude }) > 300)) return toast(`「${v}」は別の端末が使用中です。別のコードにしてください`, 6000);
+      } catch (e) { console.warn(e); }
+      if (cfg.code && cfg.code !== v) hidePosition();
+      cfg.code = v; saveCfg(); closeDialog(); sendPosition(true); toast(v ? '車両コードを保存しました' : '車両コードを消しました（位置は共有されません）');
+    },
+  });
+}
+function showQr() {
+  if (!cfg.code) return dialog('<h2>🔳 お客様用QRコード</h2><p>先にメニューの「車両コード設定」で車両コードを登録してください。</p><div class="actions"><button class="txt" data-a="close">閉じる</button></div>');
+  const u = new URL('view.html', location.href); u.search = ''; u.hash = ''; u.searchParams.set('c', cfg.code); if (cfg.dbUrl) u.searchParams.set('db', cfg.dbUrl);
+  const qr = qrcode(0, 'M'); qr.addData(u.href); qr.make();
+  dialog(`<h2>🔳 お客様用QRコード</h2><p style="margin-top:-8px;color:#777">読み取るとタクシーの位置が見られます</p><div class="qr">${qr.createSvgTag({ cellSize: 6, margin: 12, scalable: true })}</div>
+    <div class="addr" style="word-break:break-all;color:#1565c0;font-size:13px">${esc(u.href)}</div>
+    <p style="text-align:center;color:#666;font-size:14px">このQRコードを読み取るか、URLにアクセスすると<br>タクシーの現在地・空車/実車がわかります</p>
+    ${cfg.priv ? '<p style="color:#c62828;font-size:14px">「位置を非公開」がオンのため、お客様には位置が表示されません。</p>' : ''}
+    <div class="actions"><button class="txt" data-a="copy">URLをコピー</button><button class="txt" data-a="close">閉じる</button></div>`, {
+    copy() { navigator.clipboard?.writeText(u.href).then(() => toast('コピーしました'), () => toast('コピーできませんでした')); },
   });
 }
 
@@ -525,7 +613,8 @@ function showSettings() {
   const chk = (k, t) => `<button data-a="t" data-k="${k}" class="${cfg[k] ? 'on' : ''}">${t}</button>`;
   dialog(`<h2>設定</h2><div class="tags">${chk('voice', '音声案内')}${chk('avoidTolls', '有料道路を使わない')}${chk('avoidHighways', '高速を使わない')}${chk('icEdit', 'IC の位置を調整する')}</div>
     <p style="font-size:13px;color:#666">「IC の位置を調整する」をオンにすると、高速 IC のラベルをドラッグして正しい位置に直せます。</p>
-    <div class="actions"><button class="txt" data-a="key">API キーを変更</button><button class="txt" data-a="close">閉じる</button></div>`, {
+    <div class="actions"><button class="txt" data-a="db">サーバーURL</button><button class="txt" data-a="key">API キーを変更</button><button class="txt" data-a="close">閉じる</button></div>`, {
+    db() { textDialog('サーバーURL', 'Firebase Realtime Database の URL（空欄で既定）', cfg.dbUrl, v => { cfg.dbUrl = v; gridCache = null; }); },
     t(b) { cfg[b.dataset.k] = !cfg[b.dataset.k]; saveCfg(); if (b.dataset.k === 'icEdit') drawIc(); showSettings(); },
     key() { showSetup(); },
   });
@@ -537,8 +626,8 @@ function showMenu() {
     ${item('trips', '🧾', '乗車記録（走行ルート）')}${item('sos', '🎥', 'SOS 録画一覧')}${item('stats', '📊', 'GO 配車統計')}
     ${item('legend', '🗂', `統計オーバーレイ ${cfg.legend ? '非表示' : '表示'}`)}${item('ic', '🛣', `高速ICハイライト ${cfg.ic ? '非表示' : '表示'}`)}${item('traffic', '🚦', `渋滞情報 ${cfg.traffic ? '非表示' : '表示'}`)}${item('set', '🔧', '設定')}</div>`, {
     explore: go(openExplore), trips: go(showTripList), sos: go(showSosList), stats: go(showStats), set: go(showSettings),
-    code: go(() => textDialog('車両コード設定', '車両コード', cfg.code, v => cfg.code = v)),
-    qr: go(() => dialog('<h2>お客様用QRコード</h2><p>お客様にタクシーの現在地と空車／実車を見せる機能は、サーバー（Firebase）との接続設定が済むと使えるようになります。現在は準備中です。</p><div class="actions"><button class="txt" data-a="close">閉じる</button></div>')),
+    code: go(vehicleCodeDialog),
+    qr: go(showQr),
     legend: go(() => { cfg.legend = !cfg.legend; saveCfg(); renderRecords(); }),
     ic: go(() => { cfg.ic = !cfg.ic; saveCfg(); drawIc(); if (cfg.ic) toast('IC の位置は目安です。ずれていたら設定から調整できます', 4500); }),
     traffic: go(() => setTraffic(!cfg.traffic)),
@@ -552,13 +641,13 @@ function updateScale() {
 }
 function initUi() {
   $('#plateText').textContent = cfg.plate || 'ナンバー入力';
-  $('#btnPlate').onclick = () => textDialog('ナンバー入力', '車両ナンバー', cfg.plate, v => { cfg.plate = v; $('#plateText').textContent = v || 'ナンバー入力'; });
+  $('#btnPlate').onclick = () => textDialog('ナンバー入力', '車両ナンバー', cfg.plate, v => { cfg.plate = v; $('#plateText').textContent = v || 'ナンバー入力'; setTimeout(() => sendPosition(true)); });
   $('#btnExplore').onclick = openExplore; $('#btnMenu').onclick = showMenu; $('#btnTwo').onclick = twoPointDialog;
   $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('#btnStatus').onclick = toggleStatus;
   $('#btnFollow').onclick = () => { follow = !follow; setFollowUi(); if (follow && me) { map.panTo(me); map.setZoom(Math.max(map.getZoom() || 16, 16)); } };
   $('#zin').onclick = () => map.setZoom((map.getZoom() || 16) + 1); $('#zout').onclick = () => map.setZoom((map.getZoom() || 16) - 1);
-  $('#chkPrivate').checked = cfg.priv; $('#chkPrivate').onchange = e => { cfg.priv = e.target.checked; saveCfg(); };
+  $('#chkPrivate').checked = cfg.priv; $('#chkPrivate').onchange = e => { cfg.priv = e.target.checked; saveCfg(); if (cfg.priv) hidePosition(); else sendPosition(true); };
   // 統計オーバーレイ
   $('#dowSel').innerHTML = '<option value="">全曜日</option>' + L.DOW.map((d, i) => `<option value="${i}">${d}</option>`).join('');
   $('#dowSel').onchange = renderRecords;

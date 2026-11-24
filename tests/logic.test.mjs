@@ -48,3 +48,17 @@ const imp=L.csvToRecords(csv);
 assert.equal(imp.length,2); assert.equal(imp[1].address,'滋賀県大津市螢谷５, 1F'); assert.equal(imp[1].memo,'メモ "x"'); assert.equal(imp[0].dow,4);
 assert.equal(L.csvToRecords(L.recordsToCsv(imp)).length,2);
 console.log('logic: all tests passed');
+// サーバーの GPS 需要データ → 需要エリア
+{
+  const grid={'34703_135492':{'2026112412':9,'2026112413':4,'2026112403':99},'34709_135501':{'2026111712':2},'37367_-122112':{'2026112412':50},'bad':{'x':1}};
+  const g=L.gridDemand(grid,{lat:34.6975,lng:135.4868},{dow:2,hour:12});
+  assert.equal(g.length,2);                                   // 遠方（カリフォルニア）と壊れたキーは除外
+  const a=g.find(c=>c.lat===34.703);
+  assert.equal(a.score, 9*1.5 + 4*0.5*1.5);                   // 同じ時刻=1、前後1時間=0.5、同じ曜日は1.5倍、3時のデータは対象外
+  const m=L.mergeDemand([{lat:34.70,lng:135.50,n:1,score:1.5,vip:0,address:'記録'}],g);
+  assert.equal(m[0].address,'記録'); assert.equal(m[0].pct,100); assert.ok(m[1].gps && m[1].pct===67);
+  // 隣り合うマス目だけで経由地を埋めない
+  const near=[{lat:34.7000,lng:135.5000,score:5},{lat:34.7010,lng:135.5000,score:4},{lat:34.7100,lng:135.5000,score:3},{lat:34.7200,lng:135.5000,score:2}];
+  assert.deepEqual(L.pickStops(near,{lat:34.699,lng:135.5}).map(s=>s.score),[5,3,2]);
+}
+console.log('logic: cloud demand tests passed');

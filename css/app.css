@@ -103,3 +103,5 @@ body.navi #ui{display:none}
 .navbottom b{display:block;font-size:24px}.navbottom small{color:#666;font-size:12px}
 .navbottom .btn{flex:none;min-width:84px}
 @media (min-width:700px){.legend{width:180px}.sheet{max-width:520px;left:auto;right:12px;bottom:12px;border-radius:18px}}
+
+.qr{background:#fff;border-radius:16px;padding:6px;margin:10px 0}.qr svg{width:100%;height:auto;display:block}
