@@ -131,6 +131,18 @@ with sync_playwright() as p:
     l.goto('http://127.0.0.1:8765/?key=TESTKEY&code=taxi_55&plate=%E3%81%AA%E3%81%AB%E3%82%8F%20530'); l.wait_for_function('window.__map && window.__app.state.me')
     got=l.evaluate('[__app.cfg.key, __app.cfg.code, __app.cfg.plate, location.search, document.querySelector("#plateText").textContent]'); print('setup link:', got)
     assert got==['TESTKEY','taxi_55','なにわ 530','','なにわ 530'], got; s2.close()
+    # タブレット横向き：通常時とナビ中の配置
+    pg.set_viewport_size({'width':1180,'height':820}); pg.wait_for_timeout(300)
+    box=lambda sel: pg.locator(sel).bounding_box()
+    m=box('#meter'); order=[pg.locator('#meter button').nth(i).inner_text().replace('\u3000','') for i in range(3)]
+    assert order==['空車','実車','支払'] and m['x']>950 and m['y']<40 and box('#meter button >> nth=0')['height']>=90, (order,m)
+    pg.click('#btnExplore'); pg.wait_for_selector('#sheet .routebox'); sh=box('#sheet'); assert sh['x']<20 and sh['x']+sh['width']<m['x'], sh   # 画面は左、ボタンは隠れない
+    pg.screenshot(path='/tmp/shot_land.png'); pg.click('#sheet [data-a=go]'); pg.wait_for_function('!!window.__app.state.nav'); pg.wait_for_timeout(300)
+    assert pg.locator('#meter').is_visible() and pg.locator('#btnS').is_visible() and not pg.locator('.search').is_visible()
+    pg.click('#meter [data-m=occupied]'); pg.wait_for_function("__app.state.meter==='occupied'")   # ナビ中でも実車にできる
+    assert abs(pg.evaluate('Date.now()-__app.state.trip.start.t'))<10000, '乗車時刻は押した時刻'
+    pg.screenshot(path='/tmp/shot_land_nav.png'); pg.click('#meter [data-m=pay]'); pg.wait_for_function("__app.state.meter==='pay'"); pg.click('#navEnd')
+    pg.set_viewport_size({'width':390,'height':844}); pg.click('#meter [data-m=vacant]')
     # 11) お客様用ページ
     v=ctx.new_page(); v.on('pageerror', lambda e: errors.append('view pageerror: '+str(e)))
     v.route('https://tile.openstreetmap.org/**', lambda r: r.abort())

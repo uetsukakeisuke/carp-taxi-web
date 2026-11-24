@@ -93,7 +93,11 @@ body.nolegend .legend{display:none}
 .toast{position:fixed;left:50%;top:calc(180px + env(safe-area-inset-top));transform:translateX(-50%);z-index:40;background:rgba(30,30,30,.92);color:#fff;border-radius:12px;padding:10px 16px;font-size:14px;max-width:88vw;text-align:center}
 
 /* ナビ中 */
-body.navi #ui{display:none}
+/* ナビ中も 空車・実車・支払 と S は押せるように残す */
+body.navi #ui>:not(.meter):not(.sos):not(.tripbar){display:none}
+body.navi .meter{left:92px;bottom:calc(96px + env(safe-area-inset-bottom))}
+body.navi .sos{bottom:calc(96px + env(safe-area-inset-bottom))}
+body.navi .tripbar{top:auto;bottom:calc(270px + env(safe-area-inset-bottom));left:92px;right:118px;font-size:12px;padding:5px 8px}
 .navtop{top:calc(8px + env(safe-area-inset-top));left:8px;right:8px;background:#0d47a1;color:#fff;border-radius:16px;padding:12px 14px;display:flex;gap:14px;align-items:center;box-shadow:0 3px 12px rgba(0,0,0,.35)}
 .arrow{font-size:54px;line-height:1;font-weight:700;width:60px;text-align:center}
 .ndist{font-size:30px;font-weight:800}.ntext{font-size:16px;opacity:.95}
@@ -108,3 +112,31 @@ body.navi #ui{display:none}
 @media (min-width:700px){.legend{width:180px}.sheet{max-width:520px;left:auto;right:12px;bottom:12px;border-radius:18px}}
 
 .qr{background:#fff;border-radius:16px;padding:6px;margin:10px 0}.qr svg{width:100%;height:auto;display:block}
+
+/* ===== タブレット横向き：メーターと同じく右端に 空車・実車・支払 を縦に並べ、画面類は左側に出して地図を広く使う ===== */
+@media (orientation:landscape) and (min-width:900px) and (min-height:540px){
+  .top{left:12px;right:auto;width:400px;top:calc(12px + env(safe-area-inset-top))}
+  .search{top:calc(12px + env(safe-area-inset-top));left:424px;right:206px}
+  .results,.tripbar{top:calc(70px + env(safe-area-inset-top));left:424px;right:206px}
+  .meter{left:auto;right:12px;top:calc(12px + env(safe-area-inset-top));bottom:auto;width:180px;max-width:none;gap:10px}
+  .meter button{height:92px;font-size:34px;border-radius:14px}
+  .private{left:auto;right:12px;top:calc(330px + env(safe-area-inset-top));bottom:auto;width:180px;max-width:none;font-size:13px;padding:10px 12px}
+  .sos{right:12px;bottom:calc(14px + env(safe-area-inset-bottom));width:104px;height:104px}
+  .follow{right:126px;bottom:calc(14px + env(safe-area-inset-bottom));width:70px;height:70px}
+  .follow span{font-size:24px}.follow small{font-size:10px;margin-top:2px}
+  .zoom{left:12px;bottom:calc(14px + env(safe-area-inset-bottom))}
+  .legend{left:68px;bottom:calc(14px + env(safe-area-inset-bottom));width:170px}
+  .sheet{left:12px;right:auto;top:calc(70px + env(safe-area-inset-top));bottom:12px;width:440px;max-width:none;max-height:none;border-radius:18px}
+  .sheet.small{top:auto;max-height:calc(100% - 90px)}
+  .toast{top:calc(84px + env(safe-area-inset-top))}
+  /* ナビ中 */
+  body.navi .meter{left:auto;right:12px;bottom:auto}
+  body.navi .sos{bottom:calc(14px + env(safe-area-inset-bottom))}
+  body.navi .tripbar{top:auto;left:auto;right:206px;bottom:calc(14px + env(safe-area-inset-bottom));width:300px;font-size:13px}
+  .navtop{left:12px;right:auto;width:440px;top:calc(12px + env(safe-area-inset-top))}
+  .arrow{font-size:64px;width:72px}.ndist{font-size:36px}.ntext{font-size:18px}
+  .navnext{left:12px;top:calc(118px + env(safe-area-inset-top))}
+  .navside{right:206px;top:calc(12px + env(safe-area-inset-top))}
+  .navbottom{left:12px;right:auto;width:440px;bottom:12px;border-radius:16px;padding:12px 14px}
+  .speed{left:468px;bottom:14px;width:84px;height:84px}.speed b{font-size:30px}
+}

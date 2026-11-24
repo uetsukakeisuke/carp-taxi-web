@@ -32,6 +32,9 @@ const hm = t => new Date(t).toLocaleTimeString('ja-JP', { hour: '2-digit', minut
 const hms = t => new Date(t).toLocaleTimeString('ja-JP');
 const md = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
 
+// タブレット横向きでは画面類を左側に出すので、地図の表示範囲もそれを避ける
+const wide = () => matchMedia('(orientation:landscape) and (min-width:900px) and (min-height:540px)').matches;
+const viewPad = bottom => wide() ? { top: 90, bottom: 40, left: 480, right: 210 } : { top: 150, bottom, left: 40, right: 40 };
 let toastTm;
 function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTm); toastTm = setTimeout(() => t.hidden = true, ms); }
 function dialog(html, handlers = {}) {
@@ -157,8 +160,8 @@ function restoreTrip() { // 途中で画面を閉じても、実車中の記録�
 async function measure() {
   toast('位置を測定中…', 6500);
   const fix = await preciseFix();
-  if (!fix) toast('現在地が取得できません。位置情報の許可を確認してください', 5000);
-  return fix;
+  if (!fix) { toast('現在地が取得できません。位置情報の許可を確認してください', 5000); return null; }
+  return { ...fix, t: Date.now() }; // 記録する時刻は、位置が測られた時刻ではなくボタンを押した時刻にする
 }
 async function board() { // 乗車：押した時点の位置を記録し、走行ルートの記録を始める
   const fix = await measure(); if (!fix) return false;
@@ -212,7 +215,7 @@ function drawLog(t, color = '#fb8c00') { // 走行ルートと通過時刻のマ
   mk(t.pts[0], '乗', `${hms(t.pts[0].t)} 開始`, '#43a047');
   (t.events || []).forEach(e => mk(e, '', `${hms(e.t)} ${e.dir}`, '#333'));
   const last = t.pts[t.pts.length - 1]; mk(last, '降', `${hms(last.t)} 終了`, '#e53935');
-  const bd = new G.LatLngBounds(); t.pts.forEach(p => bd.extend(p)); follow = false; setFollowUi(); map.fitBounds(bd, 60);
+  const bd = new G.LatLngBounds(); t.pts.forEach(p => bd.extend(p)); follow = false; setFollowUi(); map.fitBounds(bd, viewPad(260));
 }
 function showTrip(t) {
   drawLog(t);
@@ -387,7 +390,7 @@ async function previewRoute(dest, name = '', origin = null, via = []) {
   let routes; try { routes = await computeRoutes(from, dest, via); } catch (e) { console.error(e); return toast('ルートを取得できませんでした（API の設定を確認）', 5000); }
   let sel = 0; follow = false; setFollowUi();
   destMarker = new G.Marker({ map, position: dest, zIndex: 400 });
-  const bd = new G.LatLngBounds(); routes[0].path.forEach(p => bd.extend(p)); map.fitBounds(bd, { top: 150, bottom: 320, left: 40, right: 40 });
+  const bd = new G.LatLngBounds(); routes[0].path.forEach(p => bd.extend(p)); map.fitBounds(bd, viewPad(320));
   const draw = () => {
     drawRoutes(routes, sel);
     sheet(esc(name || '目的地'), `<div class="list">${routes.map((r, i) => `<button class="alt ${i === sel ? 'on' : ''}" data-a="sel" data-i="${i}"><b>${i === 0 ? '推奨' : '別ルート' + i}　${L.fmtDur(r.duration)}・${L.fmtDist(r.total)}</b><small>到着 ${hm(Date.now() + r.duration * 1000)}　右左折 ${r.turns}回${r.desc ? '　' + esc(r.desc) + ' 経由' : ''}</small></button>`).join('')}</div>
@@ -463,7 +466,7 @@ async function openExplore() {
   cells.filter(c => L.haversine(me, c) < 6000).slice(0, 200).forEach(c => exploreOverlays.push(new G.Circle({ map, center: c, radius: 55, strokeWeight: 0, fillColor: demandColor(c), fillOpacity: .32, clickable: false })));
   stops.forEach((s, i) => exploreOverlays.push(new G.Marker({ map, position: s, label: { text: String(i + 1), color: '#fff', fontWeight: '700' }, zIndex: 300 })));
   drawRoutes([route], 0); follow = false; setFollowUi();
-  const bd = new G.LatLngBounds(); route.path.forEach(p => bd.extend(p)); map.fitBounds(bd, { top: 120, bottom: 380, left: 40, right: 40 });
+  const bd = new G.LatLngBounds(); route.path.forEach(p => bd.extend(p)); map.fitBounds(bd, viewPad(380));
   sheet('🧭 探索ナビ', `<p style="margin:0 0 6px;color:#555">${head}</p>
     <div class="cards"><div class="card c1"><b>${nearbyCount()}台</b>近隣車両</div><div class="card c2"><b>—</b>交通規制</div><div class="card c3"><b>${cells.length}箇所</b>需要エリア</div></div>
     <div class="routebox">需要予測ルート（${stops.length}箇所の高需要エリア経由）<div class="big">🕒 約${L.fmtDur(route.duration)}　📏 ${L.fmtDist(route.total)}　↱ 右左折 ${route.turns}回</div>
@@ -700,7 +703,7 @@ function initUi() {
   $('#navTraffic').onclick = () => setTraffic(!cfg.traffic); $('#navTraffic').classList.toggle('off', !cfg.traffic);
   $('#navOver').onclick = () => {
     if (!nav) return; nav.follow = !nav.follow;
-    if (!nav.follow) { map.moveCamera?.({ tilt: 0, heading: 0 }); const bd = new G.LatLngBounds(); nav.route.path.forEach(p => bd.extend(p)); map.fitBounds(bd, 80); } else if (me) navUpdate(me);
+    if (!nav.follow) { map.moveCamera?.({ tilt: 0, heading: 0 }); const bd = new G.LatLngBounds(); nav.route.path.forEach(p => bd.extend(p)); map.fitBounds(bd, viewPad(120)); } else if (me) navUpdate(me);
   };
   window.addEventListener('pagehide', () => { if (trip) ls.set('activeTrip', trip); });
   setFollowUi(); updateScale();
