@@ -1,6 +1,6 @@
 // Firebase Realtime Database との通信（REST）。
 // 旧 iPhone アプリと同じデータベース・同じ形式を使うので、新旧のアプリが同じ地図に並ぶ。
-export const DB_URL = 'https://taxi-location-sharing-default-rtdb.firebaseio.com';
+export const DB_URL = 'https://taxi-location-sharing-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 export function makeCloud(getUrl) {
   const call = async (path, query = '', opt) => {

@@ -19,7 +19,7 @@ routes={"routes":[{"duration":"600s","distanceMeters":2000,"description":"国道
  "legs":[{"steps":[{"distanceMeters":1000,"navigationInstruction":{"maneuver":"DEPART","instructions":"東に進む"}},
                    {"distanceMeters":1000,"navigationInstruction":{"maneuver":"TURN_LEFT","instructions":"左折して なにわ筋 に入る"}}]}]}]}
 errors=[]
-DB='https://taxi-location-sharing-default-rtdb.firebaseio.com'
+DB='https://taxi-location-sharing-default-rtdb.asia-southeast1.firebasedatabase.app'
 now=lambda: int(time.time()*1000)
 stamp=time.strftime('%Y%m%d%H')
 store={'taxi_locations':{'taxi_01':{'carNumber':'なにわ 530 う 226','isAvailable':True,'latitude':34.7040,'longitude':135.4930,'timestamp':now(),'userType':'driver'},
